@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ZKS i Uredba – učenje</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div id="gate" class="gate">
+  <form id="gate-form" class="gate-card" autocomplete="off">
+    <div class="gate-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="40" height="40"><path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 6a3 3 0 0 1 3 3v1h1v6H8v-6h1v-1a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v1h2v-1a1 1 0 0 0-1-1z"/></svg>
+    </div>
+    <h1>Kibernetička sigurnost</h1>
+    <p class="gate-sub">Zakon o kibernetičkoj sigurnosti (NN 14/2024) i Uredba o kibernetičkoj sigurnosti (NN 135/2024) – aplikacija za učenje</p>
+    <label for="pw">Lozinka</label>
+    <input id="pw" type="password" required autofocus>
+    <label class="check"><input id="remember" type="checkbox"> Zapamti na ovom uređaju</label>
+    <button type="submit" id="gate-btn">Otključaj</button>
+    <p id="gate-err" class="gate-err" role="alert"></p>
+    <p class="gate-note">Sadržaj je šifriran (AES-256-GCM) i otključava se isključivo u vašem pregledniku.</p>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <header class="topbar">
+    <button id="menu-btn" class="icon-btn" aria-label="Izbornik">☰</button>
+    <a href="#/" class="brand">ZKS&nbsp;+&nbsp;Uredba</a>
+    <div class="search-wrap">
+      <input id="search" type="search" placeholder="Pretraži (npr. 72 sata, revizija, MFA)…" aria-label="Pretraživanje">
+      <div id="search-results" class="search-results" hidden></div>
+    </div>
+    <button id="theme-btn" class="icon-btn" aria-label="Promijeni temu" title="Svijetla / tamna tema">◐</button>
+    <button id="lock-btn" class="icon-btn" aria-label="Zaključaj" title="Zaključaj">⏻</button>
+  </header>
+  <div class="layout">
+    <nav id="sidebar" class="sidebar"></nav>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

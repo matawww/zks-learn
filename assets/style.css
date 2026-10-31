@@ -257,3 +257,43 @@ h1, h2, h3, h4 { line-height: 1.25; text-wrap: balance; }
   .main { padding: 0; max-width: none; }
   body { background: #fff; color: #000; }
 }
+
+/* pretraživanje i isticanje */
+mark { background: #ffe58a; color: #1b2330; border-radius: 2px; padding: 0 1px; }
+mark.cur { outline: 2px solid var(--accent); background: #ffcf40; }
+.res-count { display: block; padding: 6px 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
+.hlbar {
+  position: sticky; top: 60px; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 8px; padding: 6px 10px; margin-bottom: 14px; font-size: .9rem;
+}
+
+/* katalog kontrola */
+.ksearch #kq { width: 100%; padding: 10px 14px; font-size: 1.05rem; border: 2px solid var(--accent); border-radius: 10px; background: var(--surface); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.chip {
+  font: 600 .78rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 4px 9px; border-radius: 99px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; text-decoration: none;
+}
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.sm { padding: 1px 7px; font-size: .72rem; display: inline-block; margin: 1px 0; }
+.seg { display: inline-flex; gap: 0; }
+.seg .btn { border-radius: 0; }
+.seg .btn:first-child { border-radius: 8px 0 0 8px; }
+.seg .btn:last-child { border-radius: 0 8px 8px 0; }
+.btn.on { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.ctrl { margin: 12px 0; }
+.ctrl-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.cid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; color: var(--accent); text-decoration: none; }
+.cid.big { font-size: 1.15rem; }
+.num-c { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lv-on { background: var(--accent-soft) !important; }
+.tbl tr.prag td { background: var(--surface-2); }
+.snip { margin-top: 4px; font-size: .82rem; }
+.ctl-block { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.ctl-block summary { cursor: pointer; font-weight: 600; color: var(--accent); font-size: .9rem; }
+.calc { margin-top: 8px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; font-size: .9rem; }
+.calc select { padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.calc-rows { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0; }
+.calc-row { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .82rem; }
+.calc-row.na { opacity: .4; }
+.calc-out.result { margin-top: 6px; padding: 8px 10px; }

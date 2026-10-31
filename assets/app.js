@@ -136,6 +136,10 @@
       }
     }
     for (const g of DATA.glosar) INDEX.push({ href: '#/glosar', title: g.pojam, sub: 'Pojmovnik', text: strip(g.opis) });
+    for (const c of controls()) {
+      INDEX.push({ href: `#/kontrole?q=${c.id}`, title: `${c.id} – ${c.label}`, sub: 'Katalog kontrola (Prilog B)', boost: 1,
+        text: 'Koristi se u podmjerama: ' + c.uses.map((u) => `${u.pid} ${u.naziv}`).join('; ') });
+    }
   }
 
   function progress() { return store.get(PROGRESS_STORE, {}); }
@@ -164,7 +168,9 @@
       <a href="#/alat/checklista" data-id="alat-chk"><span class="num">☑</span><span>Kontrolna lista mjera po razini</span></a>
       <a href="#/rokovi" data-id="rokovi"><span class="num">📅</span><span>Svi rokovi na jednom mjestu</span></a>
       <a href="#/glosar" data-id="glosar"><span class="num">📖</span><span>Pojmovnik</span></a>
-      <a href="#/ispit" data-id="ispit"><span class="num">🎓</span><span>Završni ispit</span></a>`;
+      <a href="#/ispit" data-id="ispit"><span class="num">🎓</span><span>Završni ispit</span></a>
+      <h3>Samoprocjena (ZSIS)</h3>
+      <a href="#/kontrole" data-id="kontrole"><span class="num">🔎</span><span>Katalog kontrola (Prilog B)</span></a>`;
     $('#sidebar').innerHTML = h;
   }
 
@@ -190,8 +196,10 @@
     else if (parts[0] === 'rokovi') { renderRokovi(main); setActive('rokovi'); }
     else if (parts[0] === 'glosar') { renderGlosar(main); setActive('glosar'); }
     else if (parts[0] === 'ispit') { renderIspit(main); setActive('ispit'); }
+    else if (parts[0] === 'kontrole') { renderKontrole(main, params); setActive('kontrole'); }
     else renderHome(main);
     main.focus({ preventScroll: true });
+    if (params.get('h') && parts[0] !== 'kontrole') applyPageHighlight(main, params.get('h'), !params.get('p'));
   }
 
   /* ---------------- Početna ---------------- */
@@ -218,6 +226,7 @@
         <a class="card stretch" href="#/alat/kategorizacija"><h3>Je li subjekt obveznik?</h3><p class="legend">Brza procjena: ključni, važni ili izvan obveza, uz pozive na članke.</p></a>
         <a class="card stretch" href="#/alat/incident"><h3>Značajan incident i rokovi</h3><p class="legend">Kriteriji iz Uredbe i izračun rokova 24 h / 72 h / 30 dana.</p></a>
         <a class="card stretch" href="#/alat/checklista"><h3>Kontrolna lista mjera</h3><p class="legend">Sve obvezne podmjere za osnovnu, srednju ili naprednu razinu – za ispis.</p></a>
+        <a class="card stretch" href="#/kontrole"><h3>Katalog kontrola (ZSIS)</h3><p class="legend">137 kontrola iz Priloga B s pragovima po razini, pretraživanjem i kalkulatorom ocjene.</p></a>
         <a class="card stretch" href="#/rokovi"><h3>Svi rokovi</h3><p class="legend">Pregled svih rokova iz Zakona i Uredbe.</p></a>
       </div>
       <h2>Kako učiti</h2>
@@ -289,6 +298,7 @@
           <span class="sub-lv">${p.r.map((x, i) => `<span><small>${LV[i][0].toUpperCase()}</small><span class="lvl lvl-${x}">${x}</span></span>`).join('')}</span></div>
         <div class="content">${p.opis}</div>
         ${p.uvjet ? `<div class="cond"><b>UVJET:</b> ${p.uvjet}</div>` : ''}
+        ${kontroleBlock(p.id)}
       </div>`).join('');
     main.innerHTML = `
       <div class="crumb">Uredba o kibernetičkoj sigurnosti · Prilog II. · Mjere upravljanja kibernetičkim sigurnosnim rizicima</div>
@@ -314,7 +324,7 @@
       const lv = Number(b.dataset.lv);
       $$('.sub', main).forEach((el) => el.classList.toggle('dim', lv >= 0 && el.dataset.r[lv] === 'C'));
     }));
-    bindCopy(main); bindQuiz(main, id, m.kviz);
+    bindCopy(main); bindQuiz(main, id, m.kviz); bindCalc(main);
     if (focusId) {
       const el = document.getElementById('p-' + focusId.replace(/\./g, '-'));
       if (el) { el.scrollIntoView({ block: 'start' }); el.style.outline = '2px solid var(--accent)'; }
@@ -378,32 +388,355 @@
 
   /* ---------------- Pretraživanje ---------------- */
   const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd');
+  // grubo korjenovanje za hrvatske padeže (lozinke → lozink, dobavljača → dobavljač)
+  const stem = (t) => {
+    if (t.length < 5 || /\d/.test(t)) return t;
+    let s = t.replace(/(ama|ima|ovi|ova|ove|om|em|ih|im|og|oj|ju)$/, '');
+    if (s === t) s = t.replace(/[aeiou]$/, '');
+    return s.length >= 4 ? s : t;
+  };
+  const termsOf = (q) => norm(q).split(/\s+/).filter(Boolean).map(stem);
+  const has = (hay, t) => hay.includes(t);
+
+  // normalizira tekst znak po znak i pamti položaj svakog znaka u izvorniku
+  function normMap(s) {
+    let n = ''; const idx = [];
+    for (let i = 0; i < s.length; i++) for (const ch of norm(s[i])) { n += ch; idx.push(i); }
+    return { n, idx };
+  }
+  function findRanges(s, terms) {
+    const { n, idx } = normMap(s);
+    const r = [];
+    for (const t of terms) {
+      for (let p = n.indexOf(t); p >= 0; p = n.indexOf(t, p + t.length)) {
+        let e = idx[p + t.length - 1] + 1;
+        while (e < s.length && /[\p{L}]/u.test(s[e]) && e - idx[p] < t.length + 4) e++; // do kraja riječi (nastavak)
+        r.push([idx[p], e]);
+      }
+    }
+    r.sort((a, b) => a[0] - b[0]);
+    const m = [];
+    for (const x of r) { const last = m[m.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else m.push([...x]); }
+    return m;
+  }
+  // HTML iz običnog teksta s istaknutim pojmovima
+  function hl(s, terms) {
+    s = String(s ?? '');
+    if (!terms || !terms.length) return esc(s);
+    let out = '', at = 0;
+    for (const [a, b] of findRanges(s, terms)) { out += esc(s.slice(at, a)) + '<mark>' + esc(s.slice(a, b)) + '</mark>'; at = b; }
+    return out + esc(s.slice(at));
+  }
+  // isječak oko prvog pogotka
+  function snippet(s, terms, len = 180) {
+    const r = findRanges(s, terms);
+    const start = r.length ? Math.max(0, r[0][0] - 60) : 0;
+    const part = s.slice(start, start + len);
+    return (start > 0 ? '…' : '') + hl(part, terms) + (start + len < s.length ? '…' : '');
+  }
+  // ističe pojmove izravno u prikazanoj stranici; vraća broj pogodaka
+  function highlightIn(root, terms) {
+    if (!terms.length) return 0;
+    const skip = /^(SCRIPT|STYLE|MARK|INPUT|TEXTAREA|SELECT|OPTION|BUTTON)$/;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.nodeValue.trim() && !skip.test(n.parentNode.nodeName) && !n.parentNode.closest('.hlbar') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+    });
+    const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+    let count = 0;
+    for (const node of nodes) {
+      const s = node.nodeValue, ranges = findRanges(s, terms);
+      if (!ranges.length) continue;
+      const frag = document.createDocumentFragment(); let at = 0;
+      for (const [a, b] of ranges) {
+        frag.append(s.slice(at, a));
+        const mk = document.createElement('mark'); mk.className = 'hit'; mk.textContent = s.slice(a, b); frag.append(mk);
+        at = b; count++;
+      }
+      frag.append(s.slice(at));
+      node.parentNode.replaceChild(frag, node);
+    }
+    return count;
+  }
+  function applyPageHighlight(main, q, scroll) {
+    // najprije cijeli izraz; ako ga nema, pojedinačne riječi
+    const phrase = norm(q.trim());
+    let n = /\s/.test(phrase) && normMap(main.textContent).n.includes(phrase) ? highlightIn(main, [phrase]) : 0;
+    if (!n) n = highlightIn(main, termsOf(q));
+    // otvori sklopljene dijelove kako bi pogoci bili vidljivi
+    $$('details', main).forEach((d) => { if (d.querySelector('mark.hit')) d.open = true; });
+    const bar = document.createElement('div');
+    bar.className = 'hlbar no-print';
+    bar.innerHTML = n
+      ? `<span>Istaknuto <b>»${esc(q)}«</b>: ${n} ${pl(n, 'pogodak', 'pogotka', 'pogodaka')}</span> <button class="btn" data-hl="prev">↑</button><button class="btn" data-hl="next">↓ Sljedeći</button><button class="btn" data-hl="off">Ukloni oznake</button>`
+      : `<span>Pojam <b>»${esc(q)}«</b> nije pronađen na ovoj stranici.</span> <button class="btn" data-hl="off">Zatvori</button>`;
+    main.prepend(bar);
+    const marks = $$('mark.hit', main);
+    let cur = -1;
+    const go = (d) => {
+      if (!marks.length) return;
+      if (cur >= 0) marks[cur].classList.remove('cur');
+      cur = (cur + d + marks.length) % marks.length;
+      marks[cur].classList.add('cur');
+      marks[cur].scrollIntoView({ block: 'center' });
+    };
+    bar.addEventListener('click', (e) => {
+      const a = e.target.dataset.hl; if (!a) return;
+      if (a === 'next') go(1); else if (a === 'prev') go(-1);
+      else { marks.forEach((m) => m.replaceWith(document.createTextNode(m.textContent))); main.normalize(); bar.remove(); }
+    });
+    if (scroll && marks.length) go(1);
+  }
+
   const searchEl = $('#search'), resEl = $('#search-results');
   let searchTimer;
   searchEl.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 150); });
-  searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') { resEl.hidden = true; searchEl.blur(); } });
+  searchEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { resEl.hidden = true; searchEl.blur(); }
+    if (e.key === 'Enter') { const a = $('a[href]', resEl); if (a) { location.hash = a.getAttribute('href'); resEl.hidden = true; searchEl.value = ''; } }
+  });
   document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) resEl.hidden = true; });
   resEl.addEventListener('click', (e) => { if (e.target.closest('a')) { resEl.hidden = true; searchEl.value = ''; } });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.nodeName) && !$('#app').hidden) {
+      e.preventDefault(); ($('#kq') || searchEl).focus();
+    }
+  });
 
   function doSearch() {
     const q = searchEl.value.trim();
     if (q.length < 2) { resEl.hidden = true; return; }
-    const terms = norm(q).split(/\s+/);
+    const terms = termsOf(q);
+    const phrase = norm(q);
     const out = [];
     for (const it of INDEX) {
       const hay = norm(it.title + ' ' + it.text);
       if (!terms.every((t) => hay.includes(t))) continue;
-      const score = terms.reduce((s, t) => s + (norm(it.title).includes(t) ? 5 : 0), 0);
-      const pos = hay.indexOf(terms[0]);
-      const raw = (it.title + ' ' + it.text);
-      const snip = raw.slice(Math.max(0, pos - 60), pos + 120);
-      out.push({ it, score, snip });
+      const score = terms.reduce((s, t) => s + (norm(it.title).includes(t) ? 5 : 0), 0) + (it.boost || 0) + (hay.includes(phrase) ? 8 : 0);
+      out.push({ it, score });
     }
     out.sort((a, b) => b.score - a.score);
+    const h = encodeURIComponent(q);
     resEl.innerHTML = out.length
-      ? out.slice(0, 30).map(({ it, snip }) => `<a href="${it.href}"><b>${esc(it.title)}</b><small>${esc(it.sub)}</small><small>…${esc(snip)}…</small></a>`).join('')
+      ? `<small class="res-count">${out.length} rezultata${out.length > 30 ? ' (prikazano 30)' : ''} · Enter otvara prvi</small>` +
+        out.slice(0, 30).map(({ it }) => [it, /\s/.test(phrase) && norm(it.title + ' ' + it.text).includes(phrase) ? [phrase] : terms]).map(([it, terms]) => `<a href="${it.href}${it.href.includes('?') ? '&' : '?'}h=${h}"><b>${hl(it.title, terms)}</b><small>${esc(it.sub)}</small><small>${snippet(it.text, terms)}</small></a>`).join('')
       : '<a>Nema rezultata.</a>';
     resEl.hidden = false;
+  }
+
+  /* ---------------- Katalog kontrola (Prilog B) ---------------- */
+  let CTRL = null, ROWS = null;
+  const subIndex = () => {
+    const map = {};
+    for (const m of DATA.mjere) for (const p of m.podskupovi) map[p.id] = { m, p };
+    return map;
+  };
+  // sve kontrole s podmjerama u kojima se koriste
+  function controls() {
+    if (CTRL) return CTRL;
+    const B = DATA.prilogB, subs = subIndex(), byId = {};
+    ROWS = [];
+    for (const [pid, tb] of Object.entries(B.tablice)) {
+      const { m, p } = subs[pid];
+      for (const [id, o, s, n] of tb.k) {
+        const pre = id.split('-')[0];
+        const c = byId[id] || (byId[id] = { id, pre, num: Number(id.split('-')[1]), label: B.prefiksi[pre] || pre, uses: [] });
+        const row = { c, pid, mjera: m, sub: p, naziv: p.naziv, r: p.r, p: [o, s, n], t: tb.t, others: tb.k.map((k) => k[0]).filter((x) => x !== id) };
+        c.uses.push(row); ROWS.push(row);
+      }
+    }
+    for (const row of ROWS) {
+      const c = row.c;
+      row.idHay = [c.id, c.id.replace('-', ''), c.id.replace('-', ' '), c.pre + c.num].map(norm).join(' ');
+      row.hay = norm(`${c.label} | ${row.pid} ${row.naziv} | mjera ${row.mjera.broj} ${row.mjera.naziv} | ${strip(row.sub.opis)} ${row.sub.uvjet || ''}`);
+      row.words = [...new Set(row.hay.split(/[^a-z0-9]+/).filter((w) => w.length > 3))];
+    }
+    CTRL = Object.values(byId).sort((a, b) => a.pre.localeCompare(b.pre) || a.num - b.num);
+    return CTRL;
+  }
+
+  function lev(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let pp = null, prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i]; let best = i;
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], pp[j - 2] + 1);
+        best = Math.min(best, cur[j]);
+      }
+      if (best > max) return max + 1;
+      pp = prev; prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  // ocjena retka (kontrola × podmjera) za jedan pojam; 0 = nema pogotka
+  function scoreToken(row, t, fuzzy) {
+    const idm = t.match(/^([a-z]{2,5})[-\s]?0*(\d{1,3})$/);
+    if (idm) return idm[1] === norm(row.c.pre) && Number(idm[2]) === row.c.num ? 100 : 0;
+    if (/^\d{1,2}\.\d{1,2}\.?$/.test(t)) return row.pid === t.replace(/\.$/, '') ? 80 : 0;
+    if (/^\d{1,2}$/.test(t)) return String(row.mjera.broj) === t ? 20 : 0;
+    if (t === norm(row.c.pre)) return 60;
+    if (row.idHay.includes(t)) return 50;
+    if (norm(row.c.label).includes(t)) return 25;
+    if (norm(row.naziv).includes(t)) return 20;
+    if (row.hay.includes(t)) return 5;
+    if (fuzzy && t.length >= 4) {
+      const max = t.length >= 8 ? 2 : 1;
+      if (row.words.some((w) => lev(t, w.slice(0, t.length + 1), max) <= max || lev(t, w, max) <= max)) return 2;
+    }
+    return 0;
+  }
+
+  const thrOk = (thr, v) => {
+    if (thr === '-' || thr == null) return null;
+    const m = thr.match(/(≥|>)?\s*([\d.]+)/);
+    const x = Number(m[2]);
+    return m[1] === '>' ? v > x : v >= x;
+  };
+  const LVL = ['osnovna', 'srednja', 'napredna'];
+  // hrvatska množina: 1 / 2–4 / 5+ (uz iznimke 11–14)
+  const pl = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many);
+
+  // tablica kontrola i kalkulator za jednu podmjeru
+  function kontroleBlock(pid, terms) {
+    const tb = DATA.prilogB.tablice[pid];
+    if (!tb) return '';
+    const p = subIndex()[pid].p;
+    const rows = tb.k.map(([id, ...v]) => `<tr><td><a class="cid" href="#/kontrole?q=${id}">${hl(id, terms)}</a></td><td class="legend">${hl(DATA.prilogB.prefiksi[id.split('-')[0]], terms)}</td>${v.map((x) => `<td class="num-c">${esc(x)}</td>`).join('')}</tr>`).join('');
+    const opts = [0, 1, 2, 3, 4, 5].map((n) => `<option>${n}</option>`).join('');
+    return `<details class="ctl-block"><summary>Kontrole za samoprocjenu (Prilog B ZSIS) – ${tb.k.length} ${tb.k.length === 1 ? 'kontrola' : tb.k.length < 5 ? 'kontrole' : 'kontrola'}</summary>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Kontrola</th><th>Područje</th>${LVL.map((l, i) => `<th>${l}${p.r[i] === 'C' ? '*' : ''}</th>`).join('')}</tr></thead>
+      <tbody>${rows}<tr class="prag"><td colspan="2"><b>Bodovni prag podmjere (prosjek)</b></td>${tb.t.map((x) => `<td class="num-c"><b>${esc(x)}</b></td>`).join('')}</tr></tbody></table></div>
+      ${p.r.includes('C') ? '<p class="legend">* na toj razini podmjera je dobrovoljna – kontrole se ocjenjuju samo ako je podmjera uključena prema procjeni rizika.</p>' : ''}
+      <div class="calc" data-pid="${pid}"><b>Kalkulator ocjene</b> · razina <select data-calc-lv>${LVL.map((l, i) => `<option value="${i}">${l}</option>`).join('')}</select>
+        <div class="calc-rows">${tb.k.map(([id]) => `<label class="calc-row">${id} <select data-calc="${id}">${opts}</select></label>`).join('')}</div>
+        <div class="calc-out legend">Unesite ocjene kontrola (0–5) prema Prilogu C.</div></div>
+    </details>`;
+  }
+
+  function bindCalc(root) {
+    root.addEventListener('change', (e) => {
+      const box = e.target.closest('.calc'); if (!box) return;
+      const tb = DATA.prilogB.tablice[box.dataset.pid];
+      const lv = Number($('[data-calc-lv]', box).value);
+      const fails = [], vals = [];
+      for (const [id, ...thr] of tb.k) {
+        const sel = $(`[data-calc="${id}"]`, box);
+        const ok = thrOk(thr[lv], Number(sel.value));
+        sel.parentNode.classList.toggle('na', ok === null);
+        if (ok === null) continue;
+        vals.push(Number(sel.value));
+        if (!ok) fails.push(`${id} (prag ${thr[lv]})`);
+      }
+      const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+      const avgOk = thrOk(tb.t[lv], avg);
+      const pass = !fails.length && avgOk;
+      $('.calc-out', box).className = 'calc-out result ' + (pass ? 'ok' : 'bad');
+      $('.calc-out', box).innerHTML = `<b>${pass ? 'PROLAZ' : 'NE PROLAZI'}</b> – prosjek ${avg.toFixed(2)} (prag ${esc(tb.t[lv])})${fails.length ? `<br>Kontrole ispod praga: ${esc(fails.join(', '))}` : ''}${!avgOk && !fails.length ? '<br>Pojedinačni pragovi su zadovoljeni, ali prosjek nije.' : ''}`;
+    });
+  }
+
+  function renderKontrole(main, params) {
+    const all = controls();
+    const B = DATA.prilogB;
+    const st = {
+      q: params.get('q') || '', pre: (params.get('pre') || '').split(',').filter(Boolean),
+      lv: params.has('lv') ? Number(params.get('lv')) : -1, ob: params.get('ob') === '1', m: Number(params.get('m') || 0), v: params.get('v') || 'k',
+    };
+    const prefs = Object.keys(B.prefiksi);
+    main.innerHTML = `
+      <div class="crumb">Samoprocjena · ${esc(B.izvor)}</div>
+      <h1>Katalog kontrola</h1>
+      <div class="art">${all.length} kontrola · ${ROWS.length} pojavljivanja u ${Object.keys(B.tablice).length} podmjera · Prilog B ZSIS-a</div>
+      <div class="card tool ksearch no-print">
+        <input id="kq" type="search" autocomplete="off" placeholder="Traži: POL-001, pol1, 5.2, lozinke, MFA, dobavljač, »mjera 8«…  (tipka / )" value="${esc(st.q)}">
+        <div class="chips">${prefs.map((p) => `<button class="chip ${st.pre.includes(p) ? 'on' : ''}" data-pre="${p}" title="${esc(B.prefiksi[p])}">${p}</button>`).join('')}</div>
+        <div class="form-row">
+          <label>Razina <select id="k-lv"><option value="-1">sve</option>${LVL.map((l, i) => `<option value="${i}" ${st.lv === i ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label><input type="checkbox" id="k-ob" ${st.ob ? 'checked' : ''}> samo obvezne podmjere (A/B) na razini</label>
+          <label>Mjera <select id="k-m"><option value="0">sve</option>${DATA.mjere.map((m) => `<option value="${m.broj}" ${st.m === m.broj ? 'selected' : ''}>${m.broj}. ${esc(m.naziv)}</option>`).join('')}</select></label>
+          <span class="seg"><button class="btn ${st.v === 'k' ? 'on' : ''}" data-v="k">Po kontrolama</button><button class="btn ${st.v === 'p' ? 'on' : ''}" data-v="p">Po podmjerama</button></span>
+          <button class="btn" id="k-reset">Poništi</button>
+        </div>
+        <div id="k-stat" class="legend" aria-live="polite"></div>
+      </div>
+      <details class="no-print" style="margin:10px 0"><summary><b>Kako se ocjenjuje (metoda iz Priloga B)</b></summary><div class="content">${B.metoda}</div></details>
+      <div id="k-out"></div>`;
+
+    const out = $('#k-out'), stat = $('#k-stat'), qEl = $('#kq');
+    const sync = () => {
+      const p = new URLSearchParams();
+      if (st.q) p.set('q', st.q); if (st.pre.length) p.set('pre', st.pre.join(','));
+      if (st.lv >= 0) p.set('lv', st.lv); if (st.ob) p.set('ob', '1'); if (st.m) p.set('m', st.m); if (st.v !== 'k') p.set('v', st.v);
+      history.replaceState(null, '', '#/kontrole' + (p.toString() ? '?' + p : ''));
+    };
+    const draw = () => {
+      const terms = termsOf(st.q);
+      const filt = ROWS.filter((r) => (!st.pre.length || st.pre.includes(r.c.pre)) && (!st.m || r.mjera.broj === st.m)
+        && (st.lv < 0 || r.p[st.lv] !== '-') && (!st.ob || st.lv < 0 || r.r[st.lv] !== 'C'));
+      let fuzzy = false;
+      const match = (fz) => filt.map((r) => {
+        let s = 0;
+        for (const t of terms) { const x = scoreToken(r, t, fz); if (!x) return null; s += x; }
+        return { r, s };
+      }).filter(Boolean);
+      let hits = match(false);
+      if (!hits.length && terms.length) { hits = match(true); fuzzy = hits.length > 0; }
+      const lvCls = (i) => (st.lv === i ? ' class="lv-on"' : '');
+      const usageRow = (h) => `<tr>
+          <td><a href="#/m/${h.r.mjera.broj}?p=${h.r.pid}">${hl(h.r.pid, terms)}</a></td>
+          <td>${hl(h.r.naziv, terms)}<div class="legend">Mjera ${h.r.mjera.broj}. ${hl(h.r.mjera.naziv, terms)}</div>${terms.length && !findRanges(h.r.naziv + h.r.mjera.naziv + h.r.c.label + h.r.c.id, terms).length ? `<div class="legend snip">${snippet(strip(h.r.sub.opis), terms, 200)}</div>` : ''}</td>
+          ${h.r.r.map((x, i) => `<td${lvCls(i)}><span class="lvl lvl-${x}">${x}</span> <span class="num-c">${esc(h.r.p[i])}</span></td>`).join('')}
+          <td class="num-c">${st.lv >= 0 ? esc(h.r.t[st.lv]) : h.r.t.map(esc).join(' / ')}</td>
+          <td>${h.r.others.map((o) => `<a class="chip sm" href="#/kontrole?q=${o}">${o}</a>`).join(' ') || '–'}</td></tr>`;
+      const head = `<thead><tr><th>Podmjera</th><th>Naziv</th>${LVL.map((l, i) => `<th${lvCls(i)}>${l}</th>`).join('')}<th>Prag podmjere</th><th>Ostale kontrole podmjere</th></tr></thead>`;
+      let html = '';
+      if (st.v === 'k') {
+        const groups = new Map();
+        for (const h of hits) { const g = groups.get(h.r.c) || { c: h.r.c, s: 0, rows: [] }; g.s = Math.max(g.s, h.s); g.rows.push(h); groups.set(h.r.c, g); }
+        const list = [...groups.values()].sort((a, b) => (terms.length ? b.s - a.s : 0) || a.c.pre.localeCompare(b.c.pre) || a.c.num - b.c.num);
+        stat.innerHTML = `${list.length} ${pl(list.length, 'kontrola', 'kontrole', 'kontrola')} · ${hits.length} ${pl(hits.length, 'pojavljivanje', 'pojavljivanja', 'pojavljivanja')}${fuzzy ? ' · <b>približni rezultati</b> (nema točnog pogotka)' : ''}`;
+        html = list.slice(0, 150).map((g) => `<div class="card ctrl" id="c-${g.c.id}">
+            <div class="ctrl-head"><span class="cid big">${hl(g.c.id, terms)}</span><span class="tag">${hl(g.c.label, terms)}</span>
+            <span class="legend">koristi se u ${g.c.uses.length} ${g.c.uses.length === 1 ? 'podmjeri' : 'podmjera'}${g.rows.length < g.c.uses.length ? ` (prikazano ${g.rows.length})` : ''}</span></div>
+            <div class="table-wrap"><table class="tbl">${head}<tbody>${g.rows.map(usageRow).join('')}</tbody></table></div></div>`).join('');
+        if (list.length > 150) html += `<p class="legend">Prikazano prvih 150 – suzite pretragu.</p>`;
+      } else {
+        const groups = new Map();
+        for (const h of hits) { const g = groups.get(h.r.pid) || { pid: h.r.pid, r: h.r, s: 0 }; g.s = Math.max(g.s, h.s); groups.set(h.r.pid, g); }
+        const order = Object.keys(B.tablice);
+        const list = [...groups.values()].sort((a, b) => (terms.length ? b.s - a.s : 0) || order.indexOf(a.pid) - order.indexOf(b.pid));
+        stat.innerHTML = `${list.length} ${pl(list.length, 'podmjera', 'podmjere', 'podmjera')}${fuzzy ? ' · <b>približni rezultati</b>' : ''}`;
+        html = list.map((g) => `<div class="card ctrl">
+            <div class="ctrl-head"><a class="cid big" href="#/m/${g.r.mjera.broj}?p=${g.pid}">${hl(g.pid, terms)}</a><b>${hl(g.r.naziv, terms)}</b>
+            <span class="legend">Mjera ${g.r.mjera.broj}. ${hl(g.r.mjera.naziv, terms)} · ${g.r.r.map((x, i) => `${LVL[i][0].toUpperCase()} <span class="lvl lvl-${x}">${x}</span>`).join(' ')}</span></div>
+            ${kontroleBlock(g.pid, terms).replace('<details class="ctl-block">', '<details class="ctl-block" open>')}</div>`).join('');
+      }
+      out.innerHTML = html || `<div class="result bad">Nema rezultata za zadane uvjete.</div>`;
+      sync();
+    };
+    let t;
+    qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = qEl.value.trim(); draw(); }, 120); });
+    qEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') { qEl.value = ''; st.q = ''; draw(); } });
+    $$('.chip[data-pre]', main).forEach((b) => b.addEventListener('click', () => {
+      b.classList.toggle('on'); st.pre = $$('.chip[data-pre].on', main).map((x) => x.dataset.pre); draw();
+    }));
+    $('#k-lv').addEventListener('change', (e) => { st.lv = Number(e.target.value); draw(); });
+    $('#k-ob').addEventListener('change', (e) => { st.ob = e.target.checked; draw(); });
+    $('#k-m').addEventListener('change', (e) => { st.m = Number(e.target.value); draw(); });
+    $$('[data-v]', main).forEach((b) => b.addEventListener('click', () => {
+      st.v = b.dataset.v; $$('[data-v]', main).forEach((x) => x.classList.toggle('on', x === b)); draw();
+    }));
+    $('#k-reset').addEventListener('click', () => { location.hash = '#/kontrole'; });
+    out.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href^="#/kontrole?q="]');
+      if (!a) return;
+      e.preventDefault(); st.q = decodeURIComponent(a.getAttribute('href').split('q=')[1]); qEl.value = st.q; draw(); window.scrollTo(0, 0);
+    });
+    bindCalc(out);
+    draw();
+    if (!st.q) qEl.focus({ preventScroll: true });
   }
 
   /* ---------------- Alat: kategorizacija ---------------- */

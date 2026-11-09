@@ -5,6 +5,7 @@ Web-aplikacija za učenje Zakona o kibernetičkoj sigurnosti (NN 14/2024) i Ured
 - 17 cjelina Zakona i 13 cjelina Uredbe, svaka s objašnjenjem, **sažetkom za klijente** i provjerom znanja
 - 13 mjera iz Priloga II. Uredbe (99 podskupova) s raspodjelom A/B/C po razinama
 - alati: procjena je li subjekt obveznik, značajan incident i rokovi prijave, kontrolna lista mjera po razini
+- **brzo učenje**: 20 dnevnih lekcija od ≈5 min, 85 kartica s ponavljanjem u razmacima, brojke napamet – sve s poveznicama na izvor
 - **katalog kontrola** iz Priloga B ZSIS-a (137 kontrola, pragovi po razini, napredno pretraživanje, kalkulator ocjene podmjere)
 - pregled svih rokova, pojmovnik, završni ispit, pretraživanje, praćenje napretka
 

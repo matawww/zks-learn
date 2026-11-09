@@ -148,7 +148,11 @@
   function renderSidebar() {
     const p = progress();
     const mark = (id) => (p[id] && p[id].best >= 80 ? '<span class="done" title="Provjera položena">✓</span>' : '');
-    let h = '<a href="#/">Početna</a>';
+    let h = `<a href="#/">Početna</a>
+      <h3>Brzo učenje</h3>
+      <a href="#/brzo" data-id="brzo"><span class="num">⚡</span><span>Danas</span></a>
+      <a href="#/brzo/kartice" data-id="brzo-kartice"><span class="num">🃏</span><span>Kartice za ponavljanje</span>${dueCount() ? `<span class="done badge">${dueCount()}</span>` : ''}</a>
+      <a href="#/brzo/brojke" data-id="brzo-brojke"><span class="num">#</span><span>Brojke napamet</span></a>`;
     for (const part of DATA.dijelovi) {
       h += `<h3>${esc(part.kratko)}</h3>`;
       for (const s of part.sekcije) {
@@ -197,6 +201,9 @@
     else if (parts[0] === 'glosar') { renderGlosar(main); setActive('glosar'); }
     else if (parts[0] === 'ispit') { renderIspit(main); setActive('ispit'); }
     else if (parts[0] === 'kontrole') { renderKontrole(main, params); setActive('kontrole'); }
+    else if (parts[0] === 'brzo' && parts[1] === 'kartice') { renderKartice(main, params); setActive('brzo-kartice'); }
+    else if (parts[0] === 'brzo' && parts[1] === 'brojke') { renderBrojke(main); setActive('brzo-brojke'); }
+    else if (parts[0] === 'brzo') { renderBrzo(main, parts[1] === 'lekcija' ? Number(parts[2]) : null); setActive('brzo'); }
     else renderHome(main);
     main.focus({ preventScroll: true });
     if (params.get('h') && parts[0] !== 'kontrole') applyPageHighlight(main, params.get('h'), !params.get('p'));
@@ -218,6 +225,7 @@
     main.innerHTML = `
       <h1>Učenje: Zakon i Uredba o kibernetičkoj sigurnosti</h1>
       <p class="art">${esc(DATA.meta.podnaslov)}</p>
+      ${todayCard()}
       <div class="content">${DATA.meta.uvod}</div>
       <h2>Napredak</h2>
       <div class="grid">${cards}</div>
@@ -521,6 +529,163 @@
         out.slice(0, 30).map(({ it }) => [it, /\s/.test(phrase) && norm(it.title + ' ' + it.text).includes(phrase) ? [phrase] : terms]).map(([it, terms]) => `<a href="${it.href}${it.href.includes('?') ? '&' : '?'}h=${h}"><b>${hl(it.title, terms)}</b><small>${esc(it.sub)}</small><small>${snippet(it.text, terms)}</small></a>`).join('')
       : '<a>Nema rezultata.</a>';
     resEl.hidden = false;
+  }
+
+  /* ---------------- Brzo učenje ---------------- */
+  const BRZO_STORE = 'zks.brzo';
+  const BOX_DAYS = [0, 1, 3, 7, 14, 30]; // razmak ponavljanja po pretincu (Leitner)
+  const dayStr = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return dayStr(d); };
+  const brzoState = () => ({ read: {}, cards: {}, streak: 0, last: null, ...store.get(BRZO_STORE, {}) });
+  const cardKey = (c) => `${c.d}:${c.q}`;
+
+  function touchStreak(st) {
+    const today = dayStr();
+    if (st.last === today) return;
+    st.streak = st.last === addDays(today, -1) ? (st.streak || 0) + 1 : 1;
+    st.last = today;
+  }
+  const liveStreak = (st) => (st.last === dayStr() || st.last === addDays(dayStr(), -1) ? st.streak || 0 : 0);
+  // kartice dospjele za ponavljanje: iz pročitanih lekcija, nove ili s istekom roka
+  function dueCards(st = brzoState()) {
+    const today = dayStr();
+    return DATA.brzo.kartice.filter((c) => st.read[c.d] && (!st.cards[cardKey(c)] || st.cards[cardKey(c)].due <= today));
+  }
+  const dueCount = () => (DATA && DATA.brzo ? dueCards().length : 0);
+  function srcHref(x) {
+    if (x.l === 'kontrole') return '#/kontrole';
+    const h = x.h ? `h=${encodeURIComponent(x.h)}` : '';
+    if (/^m\d+$/.test(x.l)) return `#/m/${x.l.slice(1)}?${x.p ? `p=${x.p}&` : ''}${h}`;
+    return `#/s/${x.l}${h ? '?' + h : ''}`;
+  }
+  const srcLabel = (x) => {
+    if (x.l === 'kontrole') return 'Katalog kontrola';
+    if (/^m\d+$/.test(x.l)) return `Mjera ${x.l.slice(1)}${x.p ? ` · ${x.p}` : ''}`;
+    const f = FLAT.find((y) => y.id === x.l);
+    return f ? `${f.sec.oznaka} · ${f.sec.clanci || ''}` : x.l;
+  };
+  const srcLink = (x) => `<a class="src" href="${srcHref(x)}" title="Pročitaj u Zakonu/Uredbi">📖 ${esc(srcLabel(x))}</a>`;
+  const nextLesson = (st) => DATA.brzo.lekcije.find((l) => !st.read[l.dan]) || null;
+
+  function todayCard() {
+    if (!DATA.brzo) return '';
+    const st = brzoState(), n = Object.keys(st.read).length, L = DATA.brzo.lekcije.length, next = nextLesson(st), due = dueCards(st).length;
+    const sk = liveStreak(st);
+    return `<div class="card today"><div class="today-head"><h3 style="margin:0">⚡ Brzo učenje – danas</h3>
+      <span class="legend">🔥 niz: <b>${sk}</b> ${pl(sk, 'dan', 'dana', 'dana')} · lekcije ${n}/${L}</span></div>
+      <div class="progress"><span style="width:${Math.round((n / L) * 100)}%"></span></div>
+      <div class="form-row">${next ? `<a class="btn primary" href="#/brzo/lekcija/${next.dan}">Dan ${next.dan}: ${esc(next.naslov)} (≈5 min)</a>` : '<span>Sve lekcije pročitane – nastavite s karticama.</span>'}
+      <a class="btn" href="#/brzo/kartice">🃏 Ponavljanje${due ? ` (${due})` : ''}</a><a class="btn" href="#/brzo/brojke"># Brojke</a></div></div>`;
+  }
+
+  function renderBrzo(main, dan) {
+    const st = brzoState();
+    const L = DATA.brzo.lekcije;
+    const lek = dan ? L.find((l) => l.dan === dan) : nextLesson(st);
+    const list = L.map((l) => `<a class="lesson ${st.read[l.dan] ? 'is-read' : ''} ${lek && l.dan === lek.dan ? 'is-cur' : ''}" href="#/brzo/lekcija/${l.dan}">
+        <span class="lday">${l.dan}</span><span>${esc(l.naslov)}</span>${st.read[l.dan] ? '<span class="done">✓</span>' : ''}</a>`).join('');
+    const nCards = lek ? DATA.brzo.kartice.filter((c) => c.d === lek.dan).length : 0;
+    const body = lek ? `
+      <div class="card lesson-card">
+        <div class="crumb">Dan ${lek.dan} od ${L.length} · ≈5 minuta</div>
+        <h2 style="border:0;margin-top:4px;padding:0">${esc(lek.naslov)}</h2>
+        <p class="legend"><b>Cilj:</b> ${esc(lek.cilj)}</p>
+        <ol class="flash">${lek.tocke.map((t) => `<li><div>${t.t}</div>${srcLink(t)}</li>`).join('')}</ol>
+        <div class="key"><b>Zapamti:</b> ${esc(lek.zapamti)}</div>
+        <div class="form-row">
+          ${st.read[lek.dan] ? `<span class="done">✓ Pročitano ${esc(st.read[lek.dan])}</span>` : '<button class="btn primary" id="b-read">✓ Pročitao sam – označi</button>'}
+          <a class="btn" href="#/brzo/kartice?d=${lek.dan}">🃏 Provjeri se (${nCards} ${pl(nCards, 'kartica', 'kartice', 'kartica')})</a>
+          ${L.find((l) => l.dan === lek.dan + 1) ? `<a class="btn" href="#/brzo/lekcija/${lek.dan + 1}">Sljedeća lekcija →</a>` : ''}
+        </div>
+      </div>` : '<div class="result ok">Sve lekcije su pročitane. Svakodnevno ponavljajte kartice – sustav ih vraća u razmacima od 1, 3, 7, 14 i 30 dana.</div>';
+    main.innerHTML = `
+      <div class="crumb">Brzo učenje</div>
+      <h1>${dan ? 'Lekcija' : 'Današnja lekcija'}</h1>
+      <div class="art">Kratke dnevne lekcije s poveznicama na točna mjesta u Zakonu i Uredbi. »📖« otvara izvor s istaknutim pojmom.</div>
+      ${todayCard()}
+      ${body}
+      <h2>Sve lekcije</h2>
+      <div class="lessons">${list}</div>
+      <p class="legend">Preporuka: jedna lekcija dnevno (≈5 min) + ponavljanje kartica (≈3 min). Za 20 radnih dana prođete cijelo gradivo.</p>`;
+    const btn = $('#b-read');
+    if (btn) btn.addEventListener('click', () => {
+      const s = brzoState(); s.read[lek.dan] = dayStr(); touchStreak(s); store.set(BRZO_STORE, s);
+      renderSidebar(); setActive('brzo'); renderBrzo(main, lek.dan); toast('Lekcija označena – njezine kartice dodane su u ponavljanje.');
+    });
+  }
+
+  function renderKartice(main, params) {
+    const st = brzoState();
+    const d = params.get('d');
+    let pool, title;
+    if (d === 'sve') { pool = shuffle([...DATA.brzo.kartice]); title = 'Sve kartice (nasumično)'; }
+    else if (d) { pool = DATA.brzo.kartice.filter((c) => c.d === Number(d)); title = `Kartice – dan ${d}`; }
+    else { pool = shuffle(dueCards(st)); title = 'Ponavljanje za danas'; }
+    const queue = [...pool];
+    let done = 0, ok = 0, shown = false;
+    main.innerHTML = `
+      <div class="crumb">Brzo učenje</div>
+      <h1>🃏 ${esc(title)}</h1>
+      <div class="art">Odgovorite u sebi, otkrijte odgovor i budite iskreni. Tipke: <b>razmak</b> – otkrij · <b>1</b> – nisam znao · <b>2</b> – znao sam.</div>
+      <div class="form-row no-print"><a class="btn ${!d ? 'on' : ''}" href="#/brzo/kartice">Za danas (${dueCards(st).length})</a><a class="btn ${d === 'sve' ? 'on' : ''}" href="#/brzo/kartice?d=sve">Sve (${DATA.brzo.kartice.length})</a></div>
+      <div id="fc"></div>`;
+    const box = $('#fc');
+    const draw = () => {
+      if (!queue.length) {
+        box.innerHTML = pool.length
+          ? `<div class="result ok"><h3 style="margin-top:0">Gotovo! ${ok} / ${done} točno.</h3><p>Kartice koje niste znali vraćaju se sutra, a one koje znate u sve duljim razmacima.</p><a class="btn primary" href="#/brzo">Natrag na lekcije</a></div>`
+          : `<div class="result">${d ? 'Nema kartica.' : 'Danas nema kartica za ponavljanje. Pročitajte novu lekciju ili otvorite »Sve«.'} <a class="btn" href="#/brzo">Lekcije</a></div>`;
+        return;
+      }
+      const c = queue[0];
+      const rec = st.cards[cardKey(c)];
+      shown = false;
+      box.innerHTML = `<div class="progress"><span style="width:${Math.round((done / (done + queue.length)) * 100)}%"></span></div>
+        <div class="flashcard">
+          <div class="legend">Dan ${c.d} · ${rec ? `pretinac ${rec.box}/5` : 'nova kartica'} · preostalo ${queue.length}</div>
+          <div class="fq">${esc(c.q)}</div>
+          <div class="fa" hidden>${esc(c.a)}<div style="margin-top:10px">${srcLink(c)}</div></div>
+          <div class="form-row fbtn"><button class="btn primary" data-f="show">Prikaži odgovor</button></div>
+        </div>`;
+    };
+    const answer = (knew) => {
+      const c = queue.shift();
+      const s = brzoState(); const k = cardKey(c);
+      const box0 = (s.cards[k] && s.cards[k].box) || 0;
+      const nb = knew ? Math.min(box0 + 1, 5) : 1;
+      s.cards[k] = { box: nb, due: addDays(dayStr(), knew ? BOX_DAYS[nb] : 1) };
+      touchStreak(s); store.set(BRZO_STORE, s); Object.assign(st, s);
+      done++; if (knew) ok++;
+      renderSidebar(); setActive('brzo-kartice'); draw();
+    };
+    const reveal = () => {
+      if (shown || !queue.length) return;
+      shown = true;
+      $('.fa', box).hidden = false;
+      $('.fbtn', box).innerHTML = '<button class="btn bad-b" data-f="no">✗ Nisam znao (1)</button><button class="btn ok-b" data-f="yes">✓ Znao sam (2)</button>';
+    };
+    box.addEventListener('click', (e) => {
+      const f = e.target.dataset.f;
+      if (f === 'show') reveal(); else if (f === 'yes') answer(true); else if (f === 'no') answer(false);
+    });
+    const onKey = (e) => {
+      if (!document.body.contains(box)) { document.removeEventListener('keydown', onKey); return; }
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.nodeName)) return;
+      if (e.key === ' ') { e.preventDefault(); reveal(); }
+      else if (shown && e.key === '1') answer(false);
+      else if (shown && e.key === '2') answer(true);
+    };
+    document.addEventListener('keydown', onKey);
+    draw();
+  }
+
+  function renderBrojke(main) {
+    const groups = {};
+    for (const b of DATA.brzo.brojke) (groups[b.g] = groups[b.g] || []).push(b);
+    main.innerHTML = `<div class="crumb">Brzo učenje</div><h1># Brojke napamet</h1>
+      <div class="art">Sve ključne brojke na jednom mjestu – pročitajte ih ujutro. »📖« otvara izvor.</div>` +
+      Object.entries(groups).map(([g, bs]) => `<h2>${esc(g)}</h2><div class="nums">${bs.map((b) => `
+        <div class="num-card"><div class="nb">${esc(b.b)}</div><div>${esc(b.s)}</div>${srcLink(b)}</div>`).join('')}</div>`).join('');
   }
 
   /* ---------------- Katalog kontrola (Prilog B) ---------------- */

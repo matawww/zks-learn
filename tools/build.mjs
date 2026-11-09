@@ -59,6 +59,16 @@ function validate(data) {
   const all = JSON.stringify(data);
   for (const m of all.matchAll(/#\/s\/([a-z0-9]+)/g)) if (!ids.has(m[1])) errors.push(`Neispravna poveznica #/s/${m[1]}`);
   for (const m of all.matchAll(/#\/m\/(\d+)/g)) if (Number(m[1]) < 1 || Number(m[1]) > data.mjere.length) errors.push(`Neispravna poveznica #/m/${m[1]}`);
+  // poveznice brzog učenja
+  if (data.brzo) {
+    const items = [...data.brzo.lekcije.flatMap((l) => l.tocke), ...data.brzo.kartice, ...data.brzo.brojke];
+    for (const x of items) {
+      const okM = /^m(\d+)$/.test(x.l) && Number(x.l.slice(1)) <= data.mjere.length;
+      if (!(ids.has(x.l) || okM || x.l === 'kontrole')) errors.push(`Brzo učenje: neispravna poveznica ${x.l}`);
+      if (x.p && !data.mjere.some((m) => m.podskupovi.some((p) => p.id === x.p))) errors.push(`Brzo učenje: nepostojeća podmjera ${x.p}`);
+    }
+    console.log(`Brzo učenje: ${data.brzo.lekcije.length} lekcija, ${data.brzo.kartice.length} kartica, ${data.brzo.brojke.length} brojki`);
+  }
   const nq = data.dijelovi.flatMap((p) => p.sekcije).reduce((s, x) => s + x.kviz.length, 0) + data.mjere.reduce((s, m) => s + m.kviz.length, 0);
   console.log(`Cjeline: ${ids.size}, mjere: ${data.mjere.length}, podskupova: ${subs}, pitanja: ${nq}`);
   ['osnovna', 'srednja', 'napredna'].forEach((l, i) => console.log(`  ${l}: A=${counts[i].A} B=${counts[i].B} C=${counts[i].C}`));

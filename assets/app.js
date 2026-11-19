@@ -152,7 +152,8 @@
       <h3>Brzo učenje</h3>
       <a href="#/brzo" data-id="brzo"><span class="num">⚡</span><span>Danas</span></a>
       <a href="#/brzo/kartice" data-id="brzo-kartice"><span class="num">🃏</span><span>Kartice za ponavljanje</span>${dueCount() ? `<span class="done badge">${dueCount()}</span>` : ''}</a>
-      <a href="#/brzo/brojke" data-id="brzo-brojke"><span class="num">#</span><span>Brojke napamet</span></a>`;
+      <a href="#/brzo/brojke" data-id="brzo-brojke"><span class="num">#</span><span>Brojke napamet</span></a>
+      <a href="#/slusaj" data-id="slusaj"><span class="num">🎙</span><span>Slušaj sastanak</span></a>`;
     for (const part of DATA.dijelovi) {
       h += `<h3>${esc(part.kratko)}</h3>`;
       for (const s of part.sekcije) {
@@ -190,6 +191,7 @@
     const params = new URLSearchParams(query || '');
     const parts = path.split('/').filter(Boolean);
     const main = $('#main');
+    if (parts[0] !== 'slusaj') stopListening();
     window.scrollTo(0, 0);
     if (!parts.length) { renderHome(main); setActive(''); }
     else if (parts[0] === 's') renderSection(main, parts[1]);
@@ -201,6 +203,7 @@
     else if (parts[0] === 'glosar') { renderGlosar(main); setActive('glosar'); }
     else if (parts[0] === 'ispit') { renderIspit(main); setActive('ispit'); }
     else if (parts[0] === 'kontrole') { renderKontrole(main, params); setActive('kontrole'); }
+    else if (parts[0] === 'slusaj') { renderSlusaj(main); setActive('slusaj'); }
     else if (parts[0] === 'brzo' && parts[1] === 'kartice') { renderKartice(main, params); setActive('brzo-kartice'); }
     else if (parts[0] === 'brzo' && parts[1] === 'brojke') { renderBrojke(main); setActive('brzo-brojke'); }
     else if (parts[0] === 'brzo') { renderBrzo(main, parts[1] === 'lekcija' ? Number(parts[2]) : null); setActive('brzo'); }
@@ -575,7 +578,7 @@
       <span class="legend">🔥 niz: <b>${sk}</b> ${pl(sk, 'dan', 'dana', 'dana')} · lekcije ${n}/${L}</span></div>
       <div class="progress"><span style="width:${Math.round((n / L) * 100)}%"></span></div>
       <div class="form-row">${next ? `<a class="btn primary" href="#/brzo/lekcija/${next.dan}">Dan ${next.dan}: ${esc(next.naslov)} (≈5 min)</a>` : '<span>Sve lekcije pročitane – nastavite s karticama.</span>'}
-      <a class="btn" href="#/brzo/kartice">🃏 Ponavljanje${due ? ` (${due})` : ''}</a><a class="btn" href="#/brzo/brojke"># Brojke</a></div></div>`;
+      <a class="btn" href="#/brzo/kartice">🃏 Ponavljanje${due ? ` (${due})` : ''}</a><a class="btn" href="#/brzo/brojke"># Brojke</a><a class="btn" href="#/slusaj">🎙 Slušaj sastanak</a></div></div>`;
   }
 
   function renderBrzo(main, dan) {
@@ -686,6 +689,257 @@
       <div class="art">Sve ključne brojke na jednom mjestu – pročitajte ih ujutro. »📖« otvara izvor.</div>` +
       Object.entries(groups).map(([g, bs]) => `<h2>${esc(g)}</h2><div class="nums">${bs.map((b) => `
         <div class="num-card"><div class="nb">${esc(b.b)}</div><div>${esc(b.s)}</div>${srcLink(b)}</div>`).join('')}</div>`).join('');
+  }
+
+  /* ---------------- Slušaj sastanak ---------------- */
+  // Govor → tekst (Web Speech API u pregledniku), teme se prepoznaju po okidačima iz DATA.slusaj; ništa se ne sprema.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const LISTEN = { rec: null, on: false, paused: false, finals: [], interim: '', shown: {}, hints: [], wake: null, timer: null, ui: null };
+  const COOLDOWN_MS = 5 * 60 * 1000;
+  let TEME = null, UPITNE = null;
+
+  const tokStem = (w) => (w.length >= 5 ? stem(w) : w);
+  function prepTeme() {
+    if (TEME) return TEME;
+    UPITNE = DATA.slusaj.upitne.map((u) => norm(u).split(/\s+/));
+    TEME = DATA.slusaj.teme.map((t) => ({
+      ...t,
+      trig: t.k.map((k) => {
+        const strong = k.startsWith('!');
+        const words = norm(k.replace(/^!/, '')).split(/\s+/).filter(Boolean);
+        return { strong, words, stems: words.map(tokStem) };
+      }),
+    }));
+    return TEME;
+  }
+  // riječ iz govora odgovara korijenu okidača (kratice do 3 znaka moraju se poklopiti točno)
+  const wordHit = (tok, s) => (s.length <= 3 ? tok === s : tok.startsWith(s));
+  function phraseAt(tokens, stems) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (!wordHit(tokens[i], stems[0])) continue;
+      let j = i, ok = true;
+      for (let k = 1; k < stems.length; k++) {
+        let found = -1;
+        for (let x = j + 1; x <= Math.min(tokens.length - 1, j + 3); x++) if (wordHit(tokens[x], stems[k])) { found = x; break; }
+        if (found < 0) { ok = false; break; }
+        j = found;
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
+  // ocjena tema za zadnji dio transkripta
+  function matchTeme(text) {
+    const tokens = norm(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).slice(-35);
+    if (!tokens.length) return [];
+    const question = UPITNE.some((u) => phraseAt(tokens, u));
+    const out = [];
+    for (const t of prepTeme()) {
+      let score = 0, strong = false, hits = [];
+      for (const tr of t.trig) {
+        if (!phraseAt(tokens, tr.stems)) continue;
+        score += tr.strong ? 2 : tr.words.length > 1 ? 2 : 1;
+        strong = strong || tr.strong;
+        hits.push(tr.words.join(' '));
+      }
+      if (score >= 3 || (score >= 2 && (strong || question))) out.push({ t, score: score + (question ? 1 : 0), hits });
+    }
+    return out.sort((a, b) => b.score - a.score);
+  }
+
+  // odlomci iz izvora koji sadrže pojam
+  function excerpt(src) {
+    if (src.l === 'kontrole') return '<p class="exc">Detalji kontrola nalaze se u katalogu kontrola (Prilog B).</p>';
+    let html = '';
+    if (/^m\d+$/.test(src.l)) {
+      const m = DATA.mjere.find((x) => x.broj === Number(src.l.slice(1)));
+      const p = m && src.p && m.podskupovi.find((x) => x.id === src.p);
+      html = p ? `<p><b>${esc(p.id)} ${esc(p.naziv)}</b></p>${p.opis}${p.uvjet ? `<p><b>UVJET:</b> ${p.uvjet}</p>` : ''}` : (m ? `<p>${m.cilj}</p>` : '');
+    } else {
+      const f = FLAT.find((x) => x.id === src.l);
+      html = f ? f.sec.html : '';
+    }
+    const tpl = document.createElement('template'); tpl.innerHTML = html;
+    const term = src.h ? norm(src.h) : '';
+    const has = (el) => term && normMap(el.textContent).n.includes(term);
+    const BLOCK = 'li, p, tr, .key, .warn';
+    const clean = (el) => (el.tagName === 'TR'
+      ? [...el.cells].map((c) => c.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' — ')
+      : el.textContent.replace(/\s+/g, ' ').trim());
+    const line = (txt, cls = 'exc') => `<p class="${cls}">${hl(txt, term ? [term] : [])}</p>`;
+    // pojam je naslov odjeljka → prikaži naslov i prve odlomke ispod njega
+    const head = term ? [...tpl.content.querySelectorAll('h2, h3, h4')].find(has) : null;
+    if (head) {
+      const out = [line(clean(head), 'exc exc-h')];
+      for (let n = head.nextElementSibling; n && !/^H[2-4]$/.test(n.tagName) && out.length < 4; n = n.nextElementSibling) {
+        const parts = n.matches(BLOCK) ? [n] : [...n.querySelectorAll('li, p, tr')];
+        for (const el of (parts.length ? parts : [n])) { if (out.length < 4) out.push(line(clean(el))); }
+      }
+      return out.join('');
+    }
+    const blocks = [...tpl.content.querySelectorAll(BLOCK)];
+    let hits = blocks.filter((b) => has(b) && ![...b.querySelectorAll('li, p, tr')].some(has));
+    if (!hits.length) hits = blocks.slice(0, 2);
+    return hits.slice(0, 3).map((b) => line(clean(b))).join('');
+  }
+
+  function addHints(found) {
+    const now = Date.now();
+    let added = 0;
+    for (const f of found) {
+      if (added >= 3) break;
+      if (LISTEN.shown[f.t.id] && now - LISTEN.shown[f.t.id] < COOLDOWN_MS) continue;
+      LISTEN.shown[f.t.id] = now;
+      LISTEN.hints = LISTEN.hints.filter((h) => h.t.id !== f.t.id);
+      LISTEN.hints.unshift({ t: f.t, at: new Date(), hits: f.hits, pin: false });
+      added++;
+    }
+    if (!added) return;
+    const pinned = LISTEN.hints.filter((h) => h.pin), rest = LISTEN.hints.filter((h) => !h.pin);
+    LISTEN.hints = [...pinned, ...rest].slice(0, 40);
+    drawHints();
+  }
+
+  function drawHints() {
+    const box = LISTEN.ui && LISTEN.ui.hints; if (!box) return;
+    box.innerHTML = LISTEN.hints.length ? LISTEN.hints.map((h, i) => `
+      <div class="hint ${h.pin ? 'pinned' : ''} ${i === 0 && !h.pin ? 'fresh' : ''}" data-i="${i}">
+        <div class="hint-head"><b>${esc(h.t.n)}</b><span class="legend">${h.at.toLocaleTimeString('hr-HR', { hour: '2-digit', minute: '2-digit' })} · »${esc(h.hits[0] || '')}«</span>
+          <button class="btn sm-b" data-act="pin" title="Zakači">${h.pin ? '📌' : '📍'}</button></div>
+        <div class="hint-o">${h.t.o}</div>
+        <div class="hint-src">${h.t.s.map((s, k) => `<button class="btn sm-b" data-act="read" data-k="${k}">📖 ${esc(srcLabel(s))}</button>`).join(' ')}</div>
+        <div class="hint-exc" hidden></div>
+      </div>`).join('') : '<p class="legend">Natuknice će se pojaviti ovdje čim se u razgovoru spomene tema iz Zakona ili Uredbe.</p>';
+  }
+
+  function drawTranscript() {
+    const el = LISTEN.ui && LISTEN.ui.tr; if (!el) return;
+    el.innerHTML = LISTEN.finals.slice(-8).map((t) => `<p>${esc(t)}</p>`).join('') + (LISTEN.interim ? `<p class="interim">${esc(LISTEN.interim)}</p>` : '');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function evaluate() {
+    clearTimeout(LISTEN.timer);
+    LISTEN.timer = setTimeout(() => addHints(matchTeme(LISTEN.finals.slice(-4).join(' ') + ' ' + LISTEN.interim)), 300);
+  }
+
+  function feedText(text, final) {
+    if (final) { LISTEN.finals.push(text.trim()); if (LISTEN.finals.length > 60) LISTEN.finals.shift(); LISTEN.interim = ''; }
+    else LISTEN.interim = text;
+    drawTranscript(); evaluate();
+  }
+
+  function setStatus(msg, cls = '') {
+    const el = LISTEN.ui && LISTEN.ui.status; if (el) { el.className = 'listen-status ' + cls; el.innerHTML = msg; }
+  }
+
+  async function startListening() {
+    if (!SR) { setStatus('Ovaj preglednik ne podržava prepoznavanje govora. Koristite Chrome ili Edge na računalu ili Chrome na Androidu – ili probni način ispod.', 'bad'); return; }
+    const rec = new SR();
+    rec.lang = 'hr-HR'; rec.continuous = true; rec.interimResults = true;
+    // lokalno prepoznavanje (bez slanja zvuka) – samo ako ga preglednik nudi za hrvatski
+    let local = false;
+    try {
+      if (SR.available) {
+        const st = await SR.available({ langs: ['hr-HR'], processLocally: true });
+        if (st === 'available') { rec.processLocally = true; local = true; }
+      }
+    } catch { /* nije podržano */ }
+    rec.onresult = (e) => {
+      if (LISTEN.paused) return;
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) feedText(r[0].transcript, true); else interim += r[0].transcript;
+      }
+      if (interim) feedText(interim, false);
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { LISTEN.on = false; setStatus('Pristup mikrofonu nije dopušten. Dopustite mikrofon u postavkama stranice (ikona lokota u adresnoj traci).', 'bad'); updateButtons(); }
+      else if (e.error === 'network') setStatus('Nema veze s uslugom prepoznavanja govora – provjerite internet.', 'bad');
+    };
+    rec.onend = () => { if (LISTEN.on) { try { rec.start(); } catch { /* već pokrenuto */ } } };
+    LISTEN.rec = rec; LISTEN.on = true; LISTEN.paused = false;
+    try { rec.start(); } catch { /* */ }
+    try { LISTEN.wake = await navigator.wakeLock.request('screen'); } catch { /* nije podržano */ }
+    setStatus(`<span class="dot"></span> Slušam… ${local ? '(lokalno prepoznavanje na uređaju – zvuk ne napušta uređaj)' : '(prepoznavanje govora obavlja usluga preglednika)'}`, 'on');
+    updateButtons();
+  }
+
+  function stopListening() {
+    if (!LISTEN.on && !LISTEN.rec) return;
+    LISTEN.on = false;
+    try { LISTEN.rec && LISTEN.rec.stop(); } catch { /* */ }
+    LISTEN.rec = null;
+    try { LISTEN.wake && LISTEN.wake.release(); } catch { /* */ }
+    LISTEN.wake = null;
+    LISTEN.finals = []; LISTEN.interim = '';
+    drawTranscript();
+    setStatus('Zaustavljeno. Transkript je obrisan.', '');
+    updateButtons();
+  }
+
+  function updateButtons() {
+    const u = LISTEN.ui; if (!u || !u.start) return;
+    u.start.hidden = LISTEN.on; u.stop.hidden = !LISTEN.on; u.pause.hidden = !LISTEN.on;
+    u.pause.textContent = LISTEN.paused ? '▶ Nastavi' : '⏸ Pauza';
+  }
+
+  function renderSlusaj(main) {
+    prepTeme();
+    main.innerHTML = `
+      <div class="crumb">Brzo učenje</div>
+      <h1>🎙 Slušaj sastanak</h1>
+      <div class="art">Dok razgovarate, aplikacija prati govor i sama prikazuje natuknice iz Zakona i Uredbe kad se spomene stručna tema. Na ostali razgovor ne reagira.</div>
+      <div class="form-row no-print">
+        <button class="btn primary" id="l-start">🎙 Počni slušati</button>
+        <button class="btn" id="l-pause" hidden>⏸ Pauza</button>
+        <button class="btn" id="l-stop" hidden>⏹ Stop</button>
+        <button class="btn" id="l-clear">Očisti natuknice</button>
+      </div>
+      <div id="l-status" class="listen-status">${SR ? 'Spremno. Kliknite »Počni slušati« i dopustite mikrofon.' : 'Ovaj preglednik ne podržava prepoznavanje govora – koristite probni način ispod.'}</div>
+      <div class="listen-grid">
+        <section><h3>Transkript (samo u memoriji)</h3><div id="l-tr" class="transcript"></div>
+          <details class="no-print" style="margin-top:10px"><summary><b>Probni način</b> – upišite ili zalijepite tekst (npr. Teams transkript)</summary>
+            <textarea id="l-text" rows="4" placeholder="npr. Koliko imamo vremena za prijavu incidenta CSIRT-u?"></textarea>
+            <div class="form-row"><button class="btn" id="l-feed">Obradi tekst</button></div></details>
+        </section>
+        <section><h3>Natuknice</h3><div id="l-hints" class="hints"></div></section>
+      </div>
+      <details class="no-print" style="margin-top:16px"><summary><b>Privatnost i savjeti</b></summary><div class="content"><ul>
+        <li>Transkript postoji samo u memoriji ove kartice; briše se na »Stop« ili zatvaranjem stranice. Aplikacija ništa ne sprema ni ne šalje.</li>
+        <li>Chrome i Edge za prepoznavanje govora u pravilu šalju zvuk svojoj usluzi (Google / Microsoft), osim ako status ne javlja lokalno prepoznavanje. Za povjerljive sastanke koristite probni način.</li>
+        <li>Razgovor obrađuje izjave drugih osoba – obavijestite sudionike (GDPR).</li>
+        <li>Online sastanak na istom laptopu: mikrofon čuje druge samo ako se zvuk pušta preko zvučnika. Ekran ostaje upaljen dok aplikacija sluša.</li>
+        <li>Govornici se ne razlikuju – natuknice se prikazuju prema temi, tko god je spomene.</li>
+      </ul></div></details>`;
+    LISTEN.ui = { start: $('#l-start'), stop: $('#l-stop'), pause: $('#l-pause'), status: $('#l-status'), tr: $('#l-tr'), hints: $('#l-hints') };
+    LISTEN.ui.start.addEventListener('click', startListening);
+    LISTEN.ui.stop.addEventListener('click', stopListening);
+    LISTEN.ui.pause.addEventListener('click', () => { LISTEN.paused = !LISTEN.paused; updateButtons(); setStatus(LISTEN.paused ? 'Pauzirano – govor se ne obrađuje.' : '<span class="dot"></span> Slušam…', LISTEN.paused ? '' : 'on'); });
+    $('#l-clear').addEventListener('click', () => { LISTEN.hints = []; LISTEN.shown = {}; LISTEN.finals = []; LISTEN.interim = ''; drawHints(); drawTranscript(); });
+    $('#l-feed').addEventListener('click', () => {
+      const txt = $('#l-text').value.trim(); if (!txt) return;
+      txt.split(/(?<=[.?!])\s+|\n+/).filter((s) => s.trim()).forEach((s) => { feedText(s, true); addHints(matchTeme(s)); });
+      $('#l-text').value = '';
+    });
+    LISTEN.ui.hints.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const card = b.closest('.hint'); const h = LISTEN.hints[Number(card.dataset.i)];
+      if (b.dataset.act === 'pin') { h.pin = !h.pin; LISTEN.hints = [...LISTEN.hints.filter((x) => x.pin), ...LISTEN.hints.filter((x) => !x.pin)]; drawHints(); }
+      if (b.dataset.act === 'read') {
+        const src = h.t.s[Number(b.dataset.k)];
+        const box = $('.hint-exc', card);
+        const same = !box.hidden && box.dataset.k === b.dataset.k;
+        box.hidden = same; box.dataset.k = b.dataset.k;
+        if (!same) box.innerHTML = `${excerpt(src)}<a href="${srcHref(src)}" class="src" data-open>↗ Otvori cijelo u novoj kartici</a>`;
+      }
+    });
+    LISTEN.ui.hints.addEventListener('click', (e) => {
+      const a = e.target.closest('a[data-open]'); if (!a) return;
+      e.preventDefault(); window.open(location.pathname + a.getAttribute('href'), '_blank');
+    });
+    drawTranscript(); drawHints(); updateButtons();
   }
 
   /* ---------------- Katalog kontrola (Prilog B) ---------------- */

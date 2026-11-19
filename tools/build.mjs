@@ -61,11 +61,16 @@ function validate(data) {
   for (const m of all.matchAll(/#\/m\/(\d+)/g)) if (Number(m[1]) < 1 || Number(m[1]) > data.mjere.length) errors.push(`Neispravna poveznica #/m/${m[1]}`);
   // poveznice brzog učenja
   if (data.brzo) {
-    const items = [...data.brzo.lekcije.flatMap((l) => l.tocke), ...data.brzo.kartice, ...data.brzo.brojke];
+    const items = [...data.brzo.lekcije.flatMap((l) => l.tocke), ...data.brzo.kartice, ...data.brzo.brojke, ...(data.slusaj ? data.slusaj.teme.flatMap((t) => t.s) : [])];
     for (const x of items) {
       const okM = /^m(\d+)$/.test(x.l) && Number(x.l.slice(1)) <= data.mjere.length;
       if (!(ids.has(x.l) || okM || x.l === 'kontrole')) errors.push(`Brzo učenje: neispravna poveznica ${x.l}`);
       if (x.p && !data.mjere.some((m) => m.podskupovi.some((p) => p.id === x.p))) errors.push(`Brzo učenje: nepostojeća podmjera ${x.p}`);
+    }
+    if (data.slusaj) {
+      const seen = new Set();
+      for (const t of data.slusaj.teme) { if (seen.has(t.id)) errors.push(`Slušaj: dvostruki id ${t.id}`); seen.add(t.id); if (!t.k.length || !t.s.length) errors.push(`Slušaj: tema ${t.id} bez okidača ili izvora`); }
+      console.log(`Slušaj: ${data.slusaj.teme.length} tema`);
     }
     console.log(`Brzo učenje: ${data.brzo.lekcije.length} lekcija, ${data.brzo.kartice.length} kartica, ${data.brzo.brojke.length} brojki`);
   }

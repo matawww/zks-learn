@@ -326,3 +326,31 @@ a.btn { text-decoration: none; display: inline-block; color: var(--text); }
 a.btn.primary { color: #fff; }
 :root[data-theme="dark"] a.btn.primary { color: #0b1220; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) a.btn.primary { color: #0b1220; } }
+
+/* slušaj sastanak */
+.listen-status { margin: 8px 0 14px; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); font-size: .92rem; }
+.listen-status.on { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.listen-status.bad { background: var(--bad-soft); color: var(--bad); }
+.listen-status .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #d93025; margin-right: 6px; animation: pulse 1.2s infinite; vertical-align: middle; }
+@keyframes pulse { 50% { opacity: .25; } }
+.listen-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 18px; }
+@media (max-width: 900px) { .listen-grid { grid-template-columns: 1fr; } }
+.listen-grid h3 { margin-top: 0; }
+.transcript { height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: .9rem; }
+@media (max-width: 900px) { .transcript { height: 140px; } }
+.transcript p { margin: 4px 0; }
+.transcript .interim { color: var(--muted); font-style: italic; }
+.transcript + details textarea { width: 100%; margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); font: inherit; }
+.hints { display: flex; flex-direction: column; gap: 10px; }
+.hint { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 10px 14px; }
+.hint.fresh { animation: flash 1.2s ease-out; }
+.hint.pinned { border-left-color: var(--warn); }
+@keyframes flash { from { background: var(--accent-soft); } to { background: var(--surface); } }
+.hint-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.hint-head .legend { flex: 1; font-size: .78rem; }
+.hint-o { margin: 6px 0; font-size: 1.02rem; line-height: 1.45; }
+.hint-src { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn.sm-b { padding: 2px 9px; font-size: .8rem; }
+.hint-exc { margin-top: 8px; padding: 8px 12px; background: var(--sum-soft); border-radius: 8px; font-size: .9rem; }
+.hint-exc .exc { margin: 4px 0 8px; }
+.hint-exc .exc-h { font-weight: 700; }

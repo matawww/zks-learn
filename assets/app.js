@@ -556,7 +556,7 @@
   }
   const dueCount = () => (DATA && DATA.brzo ? dueCards().length : 0);
   function srcHref(x) {
-    if (x.l === 'kontrole') return '#/kontrole';
+    if (x.l === 'kontrole') return x.q ? `#/kontrole?q=${encodeURIComponent(x.q)}` : '#/kontrole';
     const h = x.h ? `h=${encodeURIComponent(x.h)}` : '';
     if (/^m\d+$/.test(x.l)) return `#/m/${x.l.slice(1)}?${x.p ? `p=${x.p}&` : ''}${h}`;
     return `#/s/${x.l}${h ? '?' + h : ''}`;
@@ -728,14 +728,15 @@
     }
     return false;
   }
-  // ocjena tema za zadnji dio transkripta
-  function matchTeme(text) {
-    const tokens = norm(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).slice(-35);
-    if (!tokens.length) return [];
-    const question = UPITNE.some((u) => phraseAt(tokens, u));
+  const tokensOf = (text) => norm(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const plain = (html, max = 220) => { const t = strip(html); return t.length > max ? t.slice(0, max).replace(/\s+\S*$/, '') + '…' : t; };
+
+  // sloj 3: ručne teme (izvor/slusaj.mjs)
+  function matchRucne(tokens, question) {
     const out = [];
     for (const t of prepTeme()) {
-      let score = 0, strong = false, hits = [];
+      let score = 0, strong = false;
+      const hits = [];
       for (const tr of t.trig) {
         if (!phraseAt(tokens, tr.stems)) continue;
         score += tr.strong ? 2 : tr.words.length > 1 ? 2 : 1;
@@ -745,6 +746,206 @@
       if (score >= 3 || (score >= 2 && (strong || question))) out.push({ t, score: score + (question ? 1 : 0), hits });
     }
     return out.sort((a, b) => b.score - a.score);
+  }
+
+  /* --- sloj 1: oznake (mjera N, podmjera N.M, članak N, kontrola XXX-NNN, prilog N) --- */
+  // izgovoreni brojevi: korijen → vrijednost (najduži prvi; nastavci padeža do 3 znaka)
+  const NUM_WORDS = [
+    ['devetnaest', 19], ['osamnaest', 18], ['sedamnaest', 17], ['sesnaest', 16], ['petnaest', 15], ['cetrnaest', 14],
+    ['trinaest', 13], ['dvanaest', 12], ['jedanaest', 11], ['devedeset', 90], ['osamdeset', 80], ['sedamdeset', 70],
+    ['sezdeset', 60], ['pedeset', 50], ['cetrdeset', 40], ['trideset', 30], ['dvadeset', 20], ['deset', 10],
+    ['devet', 9], ['osam', 8], ['osm', 8], ['sedam', 7], ['sedm', 7], ['sest', 6], ['pet', 5], ['cetiri', 4], ['cetvrt', 4],
+    ['tri', 3], ['trec', 3], ['dvije', 2], ['dva', 2], ['drug', 2], ['jedan', 1], ['jedn', 1], ['prv', 1], ['nula', 0], ['sto', 100], ['stot', 100],
+  ];
+  const NUM_SUFFIX = /^(|a|e|i|o|u|og|om|oj|ih|im|ima|ga|oga|ome|emu|ega|ju)$/;
+  function wordNum(tok) {
+    if (/^\d{1,3}$/.test(tok)) return Number(tok);
+    for (const [w, v] of NUM_WORDS) if (tok.startsWith(w) && NUM_SUFFIX.test(tok.slice(w.length))) return v;
+    return null;
+  }
+  // niz tokena → brojevi {i, j (zadnji indeks), v, dec}; »pet točka dva« / »5.2« → dec '5.2'
+  function parseBrojeve(tokens) {
+    const out = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const d = tokens[i].match(/^(\d{1,2})\.(\d{1,2})$/);
+      if (d) { out.push({ i, j: i, v: Number(d[1]), dec: `${Number(d[1])}.${Number(d[2])}` }); continue; }
+      let v = wordNum(tokens[i]); if (v === null) continue;
+      let j = i;
+      const isDigit = /^\d+$/.test(tokens[i]);
+      if (!isDigit) {
+        // složeni: sto + desetice + jedinice
+        const next = () => (j + 1 < tokens.length ? wordNum(tokens[j + 1]) : null);
+        if (v === 100) { const n = next(); if (n !== null && n > 0 && n < 100 && !/^\d/.test(tokens[j + 1])) { v += n; j++; } }
+        if (v % 10 === 0 && v % 100 >= 20) { const n = next(); if (n !== null && n > 0 && n < 10 && !/^\d/.test(tokens[j + 1])) { v += n; j++; } }
+      }
+      // decimalni oblik: N točka/zarez M
+      if (j + 2 < tokens.length && /^(tock|zarez)/.test(tokens[j + 1])) {
+        const m = wordNum(tokens[j + 2]);
+        if (m !== null && m > 0 && m < 20) { out.push({ i, j: j + 2, v, dec: `${v}.${m}` }); i = j + 2; continue; }
+      }
+      out.push({ i, j, v });
+      i = j;
+    }
+    return out;
+  }
+  const ROMAN = { i: 1, ii: 2, iii: 3, iv: 4 };
+  let ART_MAP = null;
+  // članak → cjelina, iz polja »clanci« (npr. »Zakon, čl. 31.–36. i 112.«)
+  function artMap() {
+    if (ART_MAP) return ART_MAP;
+    ART_MAP = { zakon: {}, uredba: {} };
+    for (const part of DATA.dijelovi) for (const s of part.sekcije) {
+      const law = /^Uredba/.test(s.clanci || '') ? 'uredba' : 'zakon';
+      const txt = (s.clanci || '').replace(/\(.*?\)/g, '');
+      for (const m of txt.matchAll(/(\d+)\.\s*[–-]\s*(\d+)\./g)) for (let a = Number(m[1]); a <= Number(m[2]); a++) (ART_MAP[law][a] = ART_MAP[law][a] || []).push(s);
+      for (const m of txt.replace(/(\d+)\.\s*[–-]\s*(\d+)\./g, '').matchAll(/(\d+)\./g)) (ART_MAP[law][Number(m[1])] = ART_MAP[law][Number(m[1])] || []).push(s);
+    }
+    return ART_MAP;
+  }
+  const levelCounts = (m) => [0, 1, 2].map((l) => m.podskupovi.filter((p) => p.r[l] === 'A').length);
+  function mjeraTema(m) {
+    const [o, s, n] = levelCounts(m);
+    return { id: `m${m.broj}`, n: `Mjera ${m.broj}. ${m.naziv}`, o: `${plain(m.cilj, 240)}<br><b>${m.podskupovi.length} podmjera</b> (${m.podskupovi[0].id}–${m.podskupovi[m.podskupovi.length - 1].id}) · obvezno (A): osnovna <b>${o}</b>, srednja <b>${s}</b>, napredna <b>${n}</b>`, s: [{ l: `m${m.broj}` }] };
+  }
+  function podTema(m, p) {
+    const tb = DATA.prilogB && DATA.prilogB.tablice[p.id];
+    return { id: `p${p.id}`, n: `${p.id} ${p.naziv}`, o: `Razine: osnovna <b>${p.r[0]}</b> · srednja <b>${p.r[1]}</b> · napredna <b>${p.r[2]}</b> (mjera ${m.broj}. ${esc(m.naziv)})<br>${plain(p.opis, 230)}${p.uvjet ? `<br><b>UVJET:</b> ${plain(p.uvjet, 160)}` : ''}${tb ? `<br>Kontrole: ${tb.k.map((k) => k[0]).join(', ')}` : ''}`, s: [{ l: `m${m.broj}`, p: p.id }] };
+  }
+  function clanakTema(law, a) {
+    const secs = artMap()[law][a];
+    if (!secs) return null;
+    const s = secs[0];
+    const tpl = document.createElement('template'); tpl.innerHTML = s.sazetak;
+    const pts = [...tpl.content.querySelectorAll('li')].slice(0, 2).map((li) => li.textContent.trim());
+    return { id: `c${law}${a}`, n: `Članak ${a}. ${law === 'zakon' ? 'Zakona' : 'Uredbe'} → ${s.oznaka} ${s.naslov}`, o: (pts.length ? pts.map(esc).join('<br>') : plain(s.sazetak, 260)), s: [{ l: s.id, h: `${a}.` }] };
+  }
+  function kontrolaTema(c) {
+    return { id: `k${c.id}`, n: `Kontrola ${c.id} (${c.label})`, o: c.uses.map((u) => `<b>${u.pid}</b> ${esc(u.naziv)}: ${u.p.join(' / ')}`).join('<br>') + '<br><span class="legend">pragovi: osnovna / srednja / napredna</span>', s: [{ l: 'kontrole', q: c.id }] };
+  }
+  const PRILOZI = {
+    zakon: { 1: ['Prilog I. Zakona – sektori visoke kritičnosti', 'z04', 'Prilog I. – Sektori visoke kritičnosti'], 2: ['Prilog II. Zakona – drugi kritični sektori', 'z04', 'Prilog II. – Drugi kritični sektori'], 3: ['Prilog III. Zakona – nadležna tijela i CSIRT-ovi po sektorima', 'z12', 'Podjela CSIRT nadležnosti'], 4: ['Prilog IV. Zakona – sadržaj strategije', 'z11', 'Prilog IV.'] },
+    uredba: { 1: ['Prilog I. Uredbe – popis sektora djelatnosti', 'u01', 'Popis sektora'], 2: ['Prilog II. Uredbe – 13 mjera upravljanja rizicima', 'u05', 'Pregled 13 mjera'], 3: ['Prilog III. Uredbe – fizička sigurnost digitalne infrastrukture', 'u06', 'Plan fizičke sigurnosti'], 4: ['Prilog IV. Uredbe – obrazac izjave o sukladnosti', 'u07', 'Izjava o sukladnosti'] },
+  };
+  function matchOznake(text) {
+    // tokeni s točkom unutar broja (»12.4«), bez točke na kraju rečenice
+    const tokens = norm(text).replace(/[^a-z0-9.\s]/g, ' ').split(/\s+/).map((w) => w.replace(/^\.+|\.+$/g, '')).filter(Boolean).slice(-35);
+    const out = [];
+    const law = tokens.some((t) => t.startsWith('uredb')) ? 'uredba' : 'zakon';
+    const nums = parseBrojeve(tokens);
+    // broj iza oznake (»mjera 12«) ili redni broj ispred nje (»dvanaesta mjera«; ne »druge mjere«)
+    const numNear = (k, maxAfter = 3) => nums.find((n) => n.i > k && n.i <= k + maxAfter)
+      || nums.find((n) => n.j === k - 1 && !n.dec && /(a|oj|u)$/.test(tokens[n.i]) && !/^(drug|prv|jedn|\d)/.test(tokens[n.i]));
+    const push = (t, hit) => { if (t && !out.some((o) => o.t.id === t.id)) out.push({ t, score: 100, hits: [hit] }); };
+    tokens.forEach((tok, k) => {
+      if (/^(mjer|podmjer|podskup|tock)/.test(tok)) {
+        let n = numNear(k);
+        if (!n) return;
+        // »podmjera 5 2« – dva broja zaredom
+        if (!n.dec && /^(podmjer|podskup|tock)/.test(tok)) {
+          const n2 = nums.find((x) => x.i === n.j + 1 && !x.dec && x.v > 0 && x.v < 20);
+          if (n2 && n.v >= 1 && n.v <= 13) n = { ...n, dec: `${n.v}.${n2.v}` };
+        }
+        // »točka« bez decimalnog broja ne znači ništa
+        if (n.dec) {
+          const [a, b] = n.dec.split('.').map(Number);
+          const m = DATA.mjere[a - 1]; const p = m && m.podskupovi[b - 1];
+          if (p) push(podTema(m, p), `${tok} ${n.dec}`);
+        } else if (/^mjer/.test(tok) && n.v >= 1 && n.v <= 13) push(mjeraTema(DATA.mjere[n.v - 1]), `${tok} ${n.v}`);
+      } else if (/^clan/.test(tok)) {
+        const n = numNear(k); if (!n || n.dec) return;
+        const t = clanakTema(law, n.v) || clanakTema(law === 'zakon' ? 'uredba' : 'zakon', n.v);
+        push(t, `članak ${n.v}`);
+      } else if (/^prilog/.test(tok)) {
+        const nx = tokens[k + 1];
+        const v = nx && (ROMAN[nx] || wordNum(nx));
+        const pr = v && PRILOZI[law][v];
+        if (pr) push({ id: `pr${law}${v}`, n: pr[0], o: `Otvorite izvor za cijeli sadržaj priloga.`, s: [{ l: pr[1], h: pr[2] }] }, `prilog ${v}`);
+      } else if (DATA.prilogB && DATA.prilogB.prefiksi[tok.toUpperCase()]) {
+        // kontrola: prefiks + broj (»pol nula nula četiri«, »pol 4«, »pol004«)
+        const ds = []; let x = k + 1;
+        while (x < tokens.length && ds.length < 3) { const v = wordNum(tokens[x]); if (v === null || v > 99) break; ds.push(v); x++; }
+        if (!ds.length) return;
+        const num = ds.length > 1 && ds.every((d) => d < 10) ? Number(ds.join('')) : ds[ds.length - 1];
+        const c = controls().find((cc) => cc.pre === tok.toUpperCase() && cc.num === num);
+        if (c) push(kontrolaTema(c), `${c.id}`);
+      } else {
+        const cm = tok.match(/^([a-z]{3,4})0*(\d{1,3})$/);
+        if (cm && DATA.prilogB && DATA.prilogB.prefiksi[cm[1].toUpperCase()]) {
+          const c = controls().find((cc) => cc.pre === cm[1].toUpperCase() && cc.num === Number(cm[2]));
+          if (c) push(kontrolaTema(c), c.id);
+        }
+      }
+    });
+    return out;
+  }
+
+  /* --- sloj 2: automatski indeks cijelog sadržaja (težinski, IDF) --- */
+  let AUTO = null, STOP = null;
+  function buildAutoIndex() {
+    if (AUTO) return AUTO;
+    STOP = new Set((DATA.slusaj.stop || []).map(norm));
+    const entries = [];
+    const add = (t, nameTxt, bodyTxt) => entries.push({ t, name: nameTxt, body: bodyTxt });
+    for (const m of DATA.mjere) {
+      add(mjeraTema(m), m.naziv, strip(m.cilj));
+      for (const p of m.podskupovi) add(podTema(m, p), p.naziv, strip(p.opis));
+    }
+    for (const f of FLAT) if (f.type === 's') {
+      const s = f.sec;
+      const tpl = document.createElement('template'); tpl.innerHTML = s.sazetak;
+      const pts = [...tpl.content.querySelectorAll('li')].slice(0, 2).map((li) => esc(li.textContent.trim()));
+      add({ id: `s${s.id}`, n: `${s.oznaka} ${s.naslov}`, o: pts.join('<br>') || plain(s.sazetak), s: [{ l: s.id }] }, s.naslov, strip(s.sazetak));
+    }
+    for (const g of DATA.glosar) {
+      const l = /^Uredba/.test(g.izvor) ? 'u01' : 'z02';
+      add({ id: `g${g.pojam}`, n: g.pojam, o: `${g.opis} <span class="legend">(${esc(g.izvor)})</span>`, s: [{ l, h: g.pojam.split(/[ /(]/)[0] }] }, g.pojam, strip(g.opis));
+    }
+    for (const c of DATA.brzo.kartice) add({ id: `q${c.d}:${c.q}`, n: c.q, o: esc(c.a), s: [{ l: c.l, p: c.p, h: c.h }] }, c.q, c.a);
+    for (const b of DATA.brzo.brojke) add({ id: `b${b.b}${b.s}`, n: `${b.b} – ${b.s}`, o: `<b>${esc(b.b)}</b>: ${esc(b.s)}`, s: [{ l: b.l, p: b.p, h: b.h }] }, b.s, b.g);
+    const stems = (txt) => [...new Set(tokensOf(txt).filter((w) => w.length >= 3 && !STOP.has(w) && !/^\d+$/.test(w)).map(tokStem))];
+    const df = {};
+    for (const e of entries) {
+      e.nameS = new Set(stems(e.name)); e.bodyS = new Set(stems(e.body));
+      for (const s of new Set([...e.nameS, ...e.bodyS])) df[s] = (df[s] || 0) + 1;
+    }
+    const N = entries.length;
+    AUTO = { entries, idf: (s) => Math.log(1 + N / (df[s] || N)) };
+    return AUTO;
+  }
+  function matchAuto(tokens, question) {
+    const { entries, idf } = buildAutoIndex();
+    const q = [...new Set(tokens.filter((w) => w.length >= 3 && !STOP.has(w) && !/^\d+$/.test(w)).map(tokStem))];
+    if (!q.length) return [];
+    const scored = [];
+    for (const e of entries) {
+      let sc = 0, nameHit = 0, hit = 0; const hits = [];
+      for (const s of q) {
+        if (e.nameS.has(s)) { sc += 2 * idf(s); nameHit++; hit++; hits.push(s); } else if (e.bodyS.has(s)) { sc += idf(s); hit++; hits.push(s); }
+      }
+      if (!hit) continue;
+      // relevantnost: pitanje + pogodak u nazivu ili dovoljno jak zbroj
+      const ok = (question && ((nameHit >= 1 && sc >= 7) || (hit >= 2 && sc >= 9))) || sc >= 16;
+      if (ok) scored.push({ t: e.t, score: sc, hits });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    // samo izrazito najbolji pogoci (unutar 70 % najboljeg)
+    return scored.filter((x) => x.score >= scored[0].score * 0.7).slice(0, 2);
+  }
+
+  // sva tri sloja: oznake → ručne teme → automatski indeks
+  function matchTeme(text, latest) {
+    const tokens = tokensOf(text).slice(-35);
+    if (!tokens.length) return [];
+    const recent = latest != null ? tokensOf(latest) : tokens;
+    const question = UPITNE.some((u) => phraseAt(recent, u)) || UPITNE.some((u) => phraseAt(tokens.slice(-12), u));
+    const out = [...matchOznake(latest != null ? latest : text), ...matchRucne(tokens, question)];
+    if (out.length < 2) out.push(...matchAuto(recent, question));
+    const seen = new Set();
+    return out.filter((x) => {
+      const key = x.t.s.map((s) => `${s.l}|${s.p || ''}|${s.q || ''}|${s.h || ''}`).join(',') + '|' + x.t.id[0];
+      if (seen.has(x.t.id) || seen.has(key)) return false;
+      seen.add(x.t.id); seen.add(key); return true;
+    });
   }
 
   // odlomci iz izvora koji sadrže pojam
@@ -820,7 +1021,8 @@
 
   function evaluate() {
     clearTimeout(LISTEN.timer);
-    LISTEN.timer = setTimeout(() => addHints(matchTeme(LISTEN.finals.slice(-4).join(' ') + ' ' + LISTEN.interim)), 300);
+    const latest = LISTEN.interim || LISTEN.finals[LISTEN.finals.length - 1] || '';
+    LISTEN.timer = setTimeout(() => addHints(matchTeme(LISTEN.finals.slice(-4).join(' ') + ' ' + LISTEN.interim, latest)), 300);
   }
 
   function feedText(text, final) {
